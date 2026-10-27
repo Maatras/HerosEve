@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Obstawa herosa eventowego SI + NI
 // @namespace    https://github.com/Maatras/HerosEve
-// @version      0.9.0
+// @version      1.0.0
 // @description  Wspólna lista obstawy map dla klanu.
 // @match        https://*.margonem.pl/*
 // @match        http://*.margonem.pl/*
@@ -65,7 +65,6 @@
     const positionKey = id =>
         'obstawa-pozycja-' + world + '-' + id;
 
-    // Ten sam nick dla wszystkich postaci i światów.
     const nicknameKey = () =>
         'obstawa-nick-globalny';
 
@@ -101,6 +100,9 @@
     let dragging = null;
     let minimized = false;
     let previousHeight = '';
+
+    let restoringUntil = 0;
+    let resizeTimer = null;
 
     // ── Panel ──
 
@@ -549,7 +551,7 @@
         };
     }
 
-    // ── Pozycja i zmiana postaci ──
+    // ── Pozycja, rozmiar i zmiana postaci ──
 
     function constrain(left, top) {
         return {
@@ -587,11 +589,10 @@
 
         currentCharacter = current.id;
 
-        /*
-         * Jeśli wcześniej był nick zapisany dla aktualnej
-         * postaci, spróbuj go przenieść do wspólnego zapisu.
-         */
-        let savedNick = readValue(nicknameKey(), null);
+        let savedNick = readValue(
+            nicknameKey(),
+            null
+        );
 
         if (savedNick === null) {
             savedNick = readValue(
@@ -602,9 +603,7 @@
             if (savedNick) {
                 try {
                     GM_setValue(nicknameKey(), savedNick);
-                } catch (_) {
-                    // Nick można wpisać ponownie w panelu.
-                }
+                } catch (_) {}
             }
         }
 
@@ -615,6 +614,35 @@
             positionKey(current.id),
             null
         );
+
+        // Nie zapisuj ponownie rozmiaru podczas przywracania.
+        restoringUntil = Date.now() + 300;
+
+        if (
+            Number.isFinite(saved?.width) &&
+            saved.width > 0
+        ) {
+            panel.style.width = saved.width + 'px';
+        } else {
+            panel.style.width = '310px';
+        }
+
+        if (
+            Number.isFinite(saved?.height) &&
+            saved.height > 0
+        ) {
+            previousHeight = saved.height + 'px';
+
+            if (!minimized) {
+                panel.style.height = previousHeight;
+            }
+        } else {
+            previousHeight = '240px';
+
+            if (!minimized) {
+                panel.style.height = '240px';
+            }
+        }
 
         const position = constrain(
             Number.isFinite(saved?.left)
@@ -639,7 +667,7 @@
         hideTooltip();
     }
 
-    // ── Zapisywanie ustawień ──
+    // ── Zapisywanie klucza i nicku ──
 
     saveButton.addEventListener('click', () => {
         const current = getContext();
@@ -661,8 +689,6 @@
 
         try {
             GM_setValue(KEY_STORAGE, nextKey);
-
-            // Nick jest wspólny dla wszystkich postaci.
             GM_setValue(nicknameKey(), nextName);
 
             clanKey = nextKey;
@@ -748,7 +774,7 @@
         passive: false
     });
 
-    // ── Przesuwanie panelu ──
+    // ── Przesuwanie i zapisywanie pozycji ──
 
     header.addEventListener('pointerdown', event => {
         if (event.button !== 0) return;
@@ -790,9 +816,27 @@
         const rect = panel.getBoundingClientRect();
 
         try {
+            const old = readValue(
+                positionKey(current.id),
+                {}
+            );
+
+            const size = minimized
+                ? {
+                    width: old.width,
+                    height: old.height
+                }
+                : {
+                    width: rect.width,
+                    height: rect.height
+                };
+
             GM_setValue(
                 positionKey(current.id),
-                constrain(rect.left, rect.top)
+                {
+                    ...constrain(rect.left, rect.top),
+                    ...size
+                }
             );
         } catch (_) {
             lastError = 'Nie udało się zapisać pozycji';
@@ -802,6 +846,49 @@
     header.addEventListener('pointercancel', () => {
         dragging = null;
     });
+
+    // Zapis szerokości i wysokości po zmianie rozmiaru.
+    const sizeObserver = new ResizeObserver(() => {
+        clearTimeout(resizeTimer);
+
+        if (
+            minimized ||
+            !currentCharacter ||
+            Date.now() < restoringUntil
+        ) {
+            return;
+        }
+
+        const id = currentCharacter;
+
+        resizeTimer = setTimeout(() => {
+            if (
+                minimized ||
+                currentCharacter !== id ||
+                Date.now() < restoringUntil
+            ) {
+                return;
+            }
+
+            const rect = panel.getBoundingClientRect();
+
+            try {
+                GM_setValue(
+                    positionKey(id),
+                    {
+                        ...constrain(rect.left, rect.top),
+                        width: rect.width,
+                        height: rect.height
+                    }
+                );
+            } catch (_) {
+                lastError =
+                    'Nie udało się zapisać rozmiaru';
+            }
+        }, 350);
+    });
+
+    sizeObserver.observe(panel);
 
     window.addEventListener('resize', () => {
         const rect = panel.getBoundingClientRect();
