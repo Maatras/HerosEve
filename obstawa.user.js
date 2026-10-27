@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Obstawa herosa eventowego SI + NI
 // @namespace    https://github.com/Maatras/HerosEve
-// @version      0.5.0
+// @version      0.6.0
 // @description  Wspólna lista obstawy map dla klanu.
 // @match        https://*.margonem.pl/*
 // @match        http://*.margonem.pl/*
@@ -54,11 +54,57 @@
 
     if (document.getElementById('event-hunt-panel')) return;
 
-    const normalize = value =>
-        String(value || '')
+    function normalize(value) {
+        return String(value || '')
             .normalize('NFC')
             .trim()
             .toLocaleLowerCase('pl-PL');
+    }
+
+    function isCoordinate(value) {
+        return value !== null &&
+            value !== undefined &&
+            value !== '' &&
+            Number.isInteger(Number(value)) &&
+            Number(value) >= 0;
+    }
+
+    /*
+     * Kordy zapisujemy razem z informacją o postaci,
+     * żeby nie trzeba było zmieniać konfiguracji bazy.
+     */
+    function makePlayerInfo(nick, level, x, y) {
+        const name = String(nick || '').trim();
+
+        if (!name) return '';
+
+        const displayName =
+            name + (level ? ' ' + level : '');
+
+        if (isCoordinate(x) && isCoordinate(y)) {
+            return displayName +
+                ' ⟦' + Number(x) + ',' + Number(y) + '⟧';
+        }
+
+        return displayName;
+    }
+
+    function readPlayerInfo(value) {
+        const raw = String(value || '');
+        const match = raw.match(/\s*⟦(\d+),(\d+)⟧$/);
+
+        if (!match) {
+            return {
+                name: raw,
+                coordinates: null
+            };
+        }
+
+        return {
+            name: raw.slice(0, match.index).trim(),
+            coordinates: match[1] + ', ' + match[2]
+        };
+    }
 
     let clanKey = '';
 
@@ -75,11 +121,16 @@
     let snapshot = null;
     let lastSuccess = 0;
     let serverOffset = 0;
+
     let busy = false;
     let lastSent = 0;
     let lastLocation = '';
     let lastError = '';
     let keyRevision = 0;
+
+    let hoveredMap = null;
+    let pointerX = 0;
+    let pointerY = 0;
 
     // ── Panel ──
 
@@ -126,7 +177,8 @@
 
     const header = document.createElement('div');
 
-    header.title = 'Przeciągnij, aby przesunąć dodatek';
+    header.title =
+        'Przeciągnij, aby przesunąć dodatek';
 
     header.style.cssText = `
         flex: none;
@@ -198,7 +250,7 @@
 
     panel.appendChild(status);
 
-    // ── Ustawienia klucza ──
+    // ── Klucz klanu ──
 
     const settings = document.createElement('div');
 
@@ -280,6 +332,158 @@
     panel.appendChild(list);
     document.body.appendChild(panel);
 
+    // ── Okienko po najechaniu ──
+
+    const tooltip = document.createElement('div');
+
+    tooltip.style.cssText = `
+        position: fixed;
+        display: none;
+
+        min-width: 160px;
+        max-width: 260px;
+        max-height: 70vh;
+
+        box-sizing: border-box;
+        overflow: auto;
+
+        padding: 8px 10px;
+
+        background: rgba(10, 10, 10, 0.98);
+        color: #eee;
+
+        border: 1px solid #777;
+        border-radius: 9px;
+
+        box-shadow: 0 3px 12px #000d;
+
+        font: 11px/1.4 Arial, sans-serif;
+        text-align: left;
+
+        pointer-events: none;
+        z-index: 2147483647;
+    `;
+
+    document.body.appendChild(tooltip);
+
+    function hideTooltip() {
+        hoveredMap = null;
+        tooltip.style.display = 'none';
+    }
+
+    function positionTooltip() {
+        const margin = 8;
+
+        const left = Math.min(
+            pointerX + 14,
+            innerWidth - tooltip.offsetWidth - margin
+        );
+
+        const top = Math.min(
+            pointerY + 14,
+            innerHeight - tooltip.offsetHeight - margin
+        );
+
+        tooltip.style.left =
+            Math.max(margin, left) + 'px';
+
+        tooltip.style.top =
+            Math.max(margin, top) + 'px';
+    }
+
+    function updateTooltip() {
+        if (!hoveredMap) {
+            tooltip.style.display = 'none';
+            return;
+        }
+
+        const connected =
+            snapshot &&
+            Date.now() - lastSuccess < 15000;
+
+        if (!connected) {
+            tooltip.style.display = 'none';
+            return;
+        }
+
+        const players = snapshot.players.filter(
+            player =>
+                normalize(player.map) ===
+                normalize(hoveredMap)
+        );
+
+        tooltip.replaceChildren();
+
+        const title = document.createElement('div');
+
+        title.textContent = hoveredMap;
+
+        title.style.cssText = `
+            padding-bottom: 5px;
+            margin-bottom: 5px;
+
+            border-bottom: 1px solid #555;
+
+            color: #fff;
+            font-weight: bold;
+
+            overflow-wrap: anywhere;
+        `;
+
+        tooltip.appendChild(title);
+
+        if (!players.length) {
+            const empty = document.createElement('div');
+
+            empty.textContent =
+                'Nikt z dodatkiem tu nie stoi.';
+
+            empty.style.color = '#aaa';
+
+            tooltip.appendChild(empty);
+        } else {
+            players.forEach((player, index) => {
+                const info = readPlayerInfo(player.nick);
+
+                const entry = document.createElement('div');
+
+                entry.style.cssText = `
+                    padding: 3px 0;
+                    ${
+                        index > 0
+                            ? 'border-top: 1px solid #333;'
+                            : ''
+                    }
+                `;
+
+                const name = document.createElement('div');
+
+                name.textContent = info.name || 'Nieznana postać';
+
+                name.style.cssText = `
+                    color: #fff;
+                    font-weight: bold;
+                    overflow-wrap: anywhere;
+                `;
+
+                const coordinates = document.createElement('div');
+
+                coordinates.textContent =
+                    'Kordy: ' +
+                    (info.coordinates || 'brak danych');
+
+                coordinates.style.color = '#bbb';
+
+                entry.appendChild(name);
+                entry.appendChild(coordinates);
+                tooltip.appendChild(entry);
+            });
+        }
+
+        tooltip.style.display = 'block';
+        positionTooltip();
+    }
+
     // ── Zapisywanie klucza ──
 
     saveButton.addEventListener('click', () => {
@@ -297,6 +501,7 @@
             lastLocation = '';
             lastError = '';
 
+            hideTooltip();
             paint();
             sync();
         } catch (error) {
@@ -341,6 +546,8 @@
 
             minimizeButton.textContent = '+';
             minimizeButton.title = 'Przywróć';
+
+            hideTooltip();
         } else {
             status.style.display = '';
             settings.style.display = '';
@@ -370,6 +577,8 @@
 
         list.scrollTop += amount;
 
+        hideTooltip();
+
         event.preventDefault();
         event.stopPropagation();
     }, {
@@ -392,6 +601,8 @@
 
         header.setPointerCapture(event.pointerId);
         event.preventDefault();
+
+        hideTooltip();
     });
 
     header.addEventListener('pointermove', event => {
@@ -420,6 +631,10 @@
 
     header.addEventListener('pointercancel', () => {
         dragging = null;
+    });
+
+    panel.addEventListener('pointerleave', () => {
+        hideTooltip();
     });
 
     // ── Odczyt danych gry ──
@@ -455,17 +670,15 @@
                 // Gra nie udostępniła listy graczy.
             }
 
-            const nick = String(
-                niHero.nick || niHero.n || ''
-            );
-
-            const level = niHero.lvl;
-
             return {
                 id: String(niHero.id),
 
-                nick: nick +
-                    (level ? ' ' + level : ''),
+                nick: makePlayerInfo(
+                    niHero.nick || niHero.n,
+                    niHero.lvl,
+                    niHero.x,
+                    niHero.y
+                ),
 
                 map: String(niMap.name),
 
@@ -502,17 +715,15 @@
                 ];
             }
 
-            const nick = String(
-                siHero.nick || siHero.n || ''
-            );
-
-            const level = siHero.lvl;
-
             return {
                 id: String(siHero.id),
 
-                nick: nick +
-                    (level ? ' ' + level : ''),
+                nick: makePlayerInfo(
+                    siHero.nick || siHero.n,
+                    siHero.lvl,
+                    siHero.x,
+                    siHero.y
+                ),
 
                 map: String(siMap.name),
 
@@ -608,8 +819,6 @@
                         normalize(mapName)
                 ) || [];
 
-            // Nazwa mapy
-
             const mapLabel = document.createElement('span');
 
             mapLabel.textContent = mapName;
@@ -630,18 +839,7 @@
                 };
             `;
 
-            mapLabel.title = mapName + (
-                ownPlayers.length
-                    ? '\n' +
-                      ownPlayers
-                          .map(player => player.nick)
-                          .join('\n')
-                    : ''
-            );
-
             row.appendChild(mapLabel);
-
-            // Pozostali gracze widoczni na mapie
 
             let otherCount = '—';
 
@@ -672,8 +870,6 @@
                 }
             }
 
-            // Liczby: nasze osoby, pozostali
-
             const counts = document.createElement('span');
 
             counts.textContent = connected
@@ -694,8 +890,6 @@
             `;
 
             row.appendChild(counts);
-
-            // Ostatni czas obecności
 
             const lastSeen =
                 snapshot?.visits?.[mapName] ||
@@ -731,11 +925,39 @@
             }
 
             row.appendChild(time);
+
+            row.addEventListener('pointerenter', event => {
+                hoveredMap = mapName;
+                pointerX = event.clientX;
+                pointerY = event.clientY;
+
+                updateTooltip();
+            });
+
+            row.addEventListener('pointermove', event => {
+                hoveredMap = mapName;
+                pointerX = event.clientX;
+                pointerY = event.clientY;
+
+                updateTooltip();
+            });
+
+            row.addEventListener('pointerleave', event => {
+                const next = event.relatedTarget;
+
+                if (!next || !list.contains(next)) {
+                    hideTooltip();
+                }
+            });
+
             list.appendChild(row);
         }
 
-        // Zachowanie pozycji listy po odświeżeniu.
         list.scrollTop = oldScrollTop;
+
+        if (hoveredMap) {
+            updateTooltip();
+        }
     }
 
     // ── Synchronizacja z bazą ──
@@ -769,7 +991,6 @@
 
         GM_xmlhttpRequest({
             method: 'POST',
-
             url: URL,
 
             headers: {
@@ -810,9 +1031,7 @@
                     );
 
                     if (!Array.isArray(data.players)) {
-                        throw new Error(
-                            'Nieprawidłowy format'
-                        );
+                        throw new Error('Nieprawidłowy format');
                     }
 
                     snapshot = data;
