@@ -3,8 +3,8 @@
 // @namespace    https://github.com/Maatras/HerosEve
 // @version      1.0.0
 // @description  Wspólna lista obstawy map dla klanu.
-// @match        https://*.margonem.pl/*
-// @match        http://*.margonem.pl/*
+// @match        https://luvia.margonem.pl/*
+// @match        http://luvia.margonem.pl/*
 // @grant        unsafeWindow
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
