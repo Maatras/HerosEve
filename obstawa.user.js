@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Obstawa herosa eventowego SI + NI
 // @namespace    https://github.com/Maatras/HerosEve
-// @version      0.3.0
+// @version      0.5.0
 // @description  Wspólna lista obstawy map dla klanu.
 // @match        https://*.margonem.pl/*
 // @match        http://*.margonem.pl/*
@@ -63,9 +63,13 @@
     let clanKey = '';
 
     try {
-        clanKey = String(GM_getValue(STORAGE_KEY, '') || '');
+        clanKey = String(
+            GM_getValue(STORAGE_KEY, '') || ''
+        );
     } catch (error) {
-        console.error('[Obstawa] Błąd odczytu klucza.');
+        console.error(
+            '[Obstawa] Nie udało się odczytać klucza.'
+        );
     }
 
     let snapshot = null;
@@ -88,10 +92,10 @@
         left: 12px;
         top: 120px;
 
-        width: 300px;
-        height: 230px;
+        width: 310px;
+        height: 240px;
 
-        min-width: 200px;
+        min-width: 210px;
         min-height: 90px;
 
         max-width: 95vw;
@@ -106,30 +110,37 @@
 
         z-index: 2147483647;
 
-        background: #0d1012;
+        background: rgba(13, 16, 18, 0.97);
         color: #eee;
 
-        border: 2px solid #747474;
+        border: 1px solid #777;
+        border-radius: 8px;
+
         box-shadow: 0 3px 12px #000b;
 
         font: 11px/1.15 Arial, sans-serif;
         text-align: left;
     `;
 
-    const header = document.createElement('div');
+    // ── Nagłówek ──
 
-    header.textContent = 'OBSTAWA HEROSA';
+    const header = document.createElement('div');
 
     header.title = 'Przeciągnij, aby przesunąć dodatek';
 
     header.style.cssText = `
         flex: none;
-        padding: 3px 5px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 5px;
+
+        padding: 4px 5px;
 
         background: #303030;
         color: #eee;
 
-        border-bottom: 1px solid #777;
+        border-bottom: 1px solid #666;
 
         font-weight: bold;
         cursor: move;
@@ -137,12 +148,46 @@
         user-select: none;
     `;
 
+    const headerTitle = document.createElement('span');
+
+    headerTitle.textContent = 'OBSTAWA HEROSA';
+
+    const minimizeButton = document.createElement('button');
+
+    minimizeButton.type = 'button';
+    minimizeButton.textContent = '−';
+    minimizeButton.title = 'Zminimalizuj';
+
+    minimizeButton.style.cssText = `
+        flex: none;
+
+        width: 20px;
+        height: 17px;
+        padding: 0;
+
+        background: #222;
+        color: #fff;
+
+        border: 1px solid #777;
+        border-radius: 4px;
+
+        font: bold 12px Arial, sans-serif;
+        line-height: 12px;
+
+        cursor: pointer;
+    `;
+
+    header.appendChild(headerTitle);
+    header.appendChild(minimizeButton);
     panel.appendChild(header);
+
+    // ── Status ──
 
     const status = document.createElement('div');
 
     status.style.cssText = `
         flex: none;
+
         padding: 2px 5px;
 
         background: #171a1c;
@@ -153,7 +198,7 @@
 
     panel.appendChild(status);
 
-    // ── Ustawianie klucza ──
+    // ── Ustawienia klucza ──
 
     const settings = document.createElement('div');
 
@@ -162,10 +207,10 @@
         display: flex;
         gap: 3px;
 
-        padding: 3px;
+        padding: 3px 4px;
 
         background: #181b1d;
-        border-bottom: 1px solid #555;
+        border-bottom: 1px solid #444;
     `;
 
     const keyInput = document.createElement('input');
@@ -181,12 +226,13 @@
         min-width: 0;
 
         box-sizing: border-box;
-        padding: 2px 4px;
+        padding: 2px 5px;
 
         background: #080a0c;
         color: #fff;
 
-        border: 1px solid #777;
+        border: 1px solid #666;
+        border-radius: 4px;
 
         font: 10px Arial, sans-serif;
     `;
@@ -198,12 +244,14 @@
 
     saveButton.style.cssText = `
         flex: none;
-        padding: 2px 5px;
+
+        padding: 2px 6px;
 
         background: #383838;
         color: #fff;
 
         border: 1px solid #777;
+        border-radius: 4px;
 
         font: 10px Arial, sans-serif;
         cursor: pointer;
@@ -212,6 +260,8 @@
     settings.appendChild(keyInput);
     settings.appendChild(saveButton);
     panel.appendChild(settings);
+
+    // ── Lista map ──
 
     const list = document.createElement('div');
 
@@ -222,13 +272,15 @@
         overflow-y: auto;
         overflow-x: hidden;
 
-        padding: 2px;
+        padding: 3px;
 
         scrollbar-width: thin;
     `;
 
     panel.appendChild(list);
     document.body.appendChild(panel);
+
+    // ── Zapisywanie klucza ──
 
     saveButton.addEventListener('click', () => {
         const newKey = keyInput.value.trim();
@@ -262,7 +314,48 @@
         }
     });
 
-    // ── Przewijanie kółkiem myszy ──
+    // ── Minimalizowanie ──
+
+    let minimized = false;
+    let previousHeight = '';
+
+    minimizeButton.addEventListener('pointerdown', event => {
+        event.stopPropagation();
+    });
+
+    minimizeButton.addEventListener('click', event => {
+        event.stopPropagation();
+
+        minimized = !minimized;
+
+        if (minimized) {
+            previousHeight = panel.style.height;
+
+            status.style.display = 'none';
+            settings.style.display = 'none';
+            list.style.display = 'none';
+
+            panel.style.minHeight = '0';
+            panel.style.height = 'auto';
+            panel.style.resize = 'none';
+
+            minimizeButton.textContent = '+';
+            minimizeButton.title = 'Przywróć';
+        } else {
+            status.style.display = '';
+            settings.style.display = '';
+            list.style.display = '';
+
+            panel.style.minHeight = '90px';
+            panel.style.height = previousHeight || '240px';
+            panel.style.resize = 'both';
+
+            minimizeButton.textContent = '−';
+            minimizeButton.title = 'Zminimalizuj';
+        }
+    });
+
+    // ── Przewijanie kółkiem ──
 
     panel.addEventListener('wheel', event => {
         if (list.scrollHeight <= list.clientHeight) return;
@@ -279,7 +372,9 @@
 
         event.preventDefault();
         event.stopPropagation();
-    }, { passive: false });
+    }, {
+        passive: false
+    });
 
     // ── Przesuwanie panelu ──
 
@@ -339,7 +434,8 @@
             let observed = null;
 
             try {
-                const players = W.Engine.others.getDrawableList();
+                const players =
+                    W.Engine.others.getDrawableList();
 
                 if (Array.isArray(players)) {
                     observed = [
@@ -349,18 +445,30 @@
                                     player?.isPlayer === true &&
                                     player.d?.id != null
                                 )
-                                .map(player => String(player.d.id))
+                                .map(player =>
+                                    String(player.d.id)
+                                )
                         )
                     ];
                 }
             } catch (error) {
-                // Gra nie udostępniła aktualnej listy graczy.
+                // Gra nie udostępniła listy graczy.
             }
+
+            const nick = String(
+                niHero.nick || niHero.n || ''
+            );
+
+            const level = niHero.lvl;
 
             return {
                 id: String(niHero.id),
-                nick: String(niHero.nick || niHero.n || ''),
+
+                nick: nick +
+                    (level ? ' ' + level : ''),
+
                 map: String(niMap.name),
+
                 observed
             };
         }
@@ -387,15 +495,27 @@
                             .map(([key, player]) =>
                                 String(player.id ?? key)
                             )
-                            .filter(id => /^\d+$/.test(id))
+                            .filter(id =>
+                                /^\d+$/.test(id)
+                            )
                     )
                 ];
             }
 
+            const nick = String(
+                siHero.nick || siHero.n || ''
+            );
+
+            const level = siHero.lvl;
+
             return {
                 id: String(siHero.id),
-                nick: String(siHero.nick || siHero.n || ''),
+
+                nick: nick +
+                    (level ? ' ' + level : ''),
+
                 map: String(siMap.name),
+
                 observed
             };
         }
@@ -414,11 +534,13 @@
         const seconds = totalSeconds % 60;
 
         return [hours, minutes, seconds]
-            .map(value => String(value).padStart(2, '0'))
+            .map(value =>
+                String(value).padStart(2, '0')
+            )
             .join(':');
     }
 
-    // ── Wygląd listy ──
+    // ── Wyświetlanie listy ──
 
     function paint() {
         const oldScrollTop = list.scrollTop;
@@ -426,22 +548,33 @@
         list.replaceChildren();
 
         const age = Date.now() - lastSuccess;
-        const connected = Boolean(snapshot && age < 15000);
+
+        const connected = Boolean(
+            snapshot && age < 15000
+        );
 
         if (!clanKey) {
-            status.textContent = 'Wpisz i zapisz klucz klanu';
+            status.textContent =
+                'Wpisz i zapisz klucz klanu';
+
             status.style.color = '#ffbd73';
         } else if (lastError) {
             status.textContent = lastError;
             status.style.color = '#ff8f80';
         } else if (connected) {
-            status.textContent = 'Połączono · nasze, inni';
+            status.textContent =
+                'Połączono · nasze, inni';
+
             status.style.color = '#80df97';
         } else if (snapshot) {
-            status.textContent = 'Brak połączenia · dane nieaktualne';
+            status.textContent =
+                'Brak połączenia · dane nieaktualne';
+
             status.style.color = '#ff8f80';
         } else {
-            status.textContent = 'Łączenie / czekam na dane gry…';
+            status.textContent =
+                'Łączenie / czekam na dane gry…';
+
             status.style.color = '#ffbd73';
         }
 
@@ -451,25 +584,31 @@
             row.style.cssText = `
                 display: flex;
                 align-items: center;
-                gap: 3px;
+                gap: 4px;
 
-                min-height: 15px;
+                min-height: 17px;
                 box-sizing: border-box;
 
-                margin-bottom: 2px;
-                padding: 0 3px;
+                margin-bottom: 3px;
+                padding: 1px 4px;
 
                 overflow: hidden;
                 white-space: nowrap;
 
-                background: #171a1c;
-                border: 1px solid #686868;
+                background: #202427;
+
+                border: 1px solid #5e6568;
+                border-radius: 6px;
             `;
 
-            const ownPlayers = snapshot?.players?.filter(
-                player =>
-                    normalize(player.map) === normalize(mapName)
-            ) || [];
+            const ownPlayers =
+                snapshot?.players?.filter(
+                    player =>
+                        normalize(player.map) ===
+                        normalize(mapName)
+                ) || [];
+
+            // Nazwa mapy
 
             const mapLabel = document.createElement('span');
 
@@ -485,8 +624,8 @@
                 color: ${
                     connected
                         ? ownPlayers.length
-                            ? '#81ef83'
-                            : '#ff7f78'
+                            ? '#83ee92'
+                            : '#ff8980'
                         : '#aaa'
                 };
             `;
@@ -496,11 +635,13 @@
                     ? '\n' +
                       ownPlayers
                           .map(player => player.nick)
-                          .join(', ')
+                          .join('\n')
                     : ''
             );
 
             row.appendChild(mapLabel);
+
+            // Pozostali gracze widoczni na mapie
 
             let otherCount = '—';
 
@@ -516,16 +657,22 @@
 
                 if (observer) {
                     const ownIds = new Set(
-                        ownPlayers.map(player => String(player.id))
+                        ownPlayers.map(player =>
+                            String(player.id)
+                        )
                     );
 
                     otherCount = new Set(
                         observer.observed
                             .map(String)
-                            .filter(id => !ownIds.has(id))
+                            .filter(id =>
+                                !ownIds.has(id)
+                            )
                     ).size;
                 }
             }
+
+            // Liczby: nasze osoby, pozostali
 
             const counts = document.createElement('span');
 
@@ -534,11 +681,11 @@
                 : '—, —';
 
             counts.title =
-                'Nasze postacie z dodatkiem, pozostali widoczni gracze';
+                'Nasze osoby z dodatkiem, pozostali widoczni gracze';
 
             counts.style.cssText = `
                 flex: none;
-                min-width: 30px;
+                min-width: 32px;
 
                 color: ${connected ? '#00ef90' : '#aaa'};
 
@@ -547,6 +694,8 @@
             `;
 
             row.appendChild(counts);
+
+            // Ostatni czas obecności
 
             const lastSeen =
                 snapshot?.visits?.[mapName] ||
@@ -585,6 +734,7 @@
             list.appendChild(row);
         }
 
+        // Zachowanie pozycji listy po odświeżeniu.
         list.scrollTop = oldScrollTop;
     }
 
@@ -595,9 +745,7 @@
 
         const current = getContext();
 
-        if (!current || !current.nick) {
-            return;
-        }
+        if (!current || !current.nick) return;
 
         const locationSignature =
             current.id + '|' + current.map;
@@ -621,6 +769,7 @@
 
         GM_xmlhttpRequest({
             method: 'POST',
+
             url: URL,
 
             headers: {
@@ -648,16 +797,22 @@
                     response.status < 200 ||
                     response.status >= 300
                 ) {
-                    lastError = 'Błąd bazy HTTP ' + response.status;
+                    lastError =
+                        'Błąd bazy HTTP ' + response.status;
+
                     paint();
                     return;
                 }
 
                 try {
-                    const data = JSON.parse(response.responseText);
+                    const data = JSON.parse(
+                        response.responseText
+                    );
 
                     if (!Array.isArray(data.players)) {
-                        throw new Error('Nieprawidłowy format');
+                        throw new Error(
+                            'Nieprawidłowy format'
+                        );
                     }
 
                     snapshot = data;
