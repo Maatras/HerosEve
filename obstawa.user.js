@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Obstawa herosa eventowego SI + NI
 // @namespace    https://github.com/Maatras/HerosEve
-// @version      0.8.0
+// @version      0.9.0
 // @description  Wspólna lista obstawy map dla klanu.
 // @match        https://*.margonem.pl/*
 // @match        http://*.margonem.pl/*
@@ -65,8 +65,9 @@
     const positionKey = id =>
         'obstawa-pozycja-' + world + '-' + id;
 
-    const nicknameKey = id =>
-        'obstawa-nick-' + world + '-' + id;
+    // Ten sam nick dla wszystkich postaci i światów.
+    const nicknameKey = () =>
+        'obstawa-nick-globalny';
 
     function readValue(key, fallback) {
         try {
@@ -217,7 +218,7 @@
 
     panel.appendChild(status);
 
-    // ── Klucz i wyświetlany nick ──
+    // ── Ustawienia ──
 
     const settings = document.createElement('div');
 
@@ -463,10 +464,8 @@
         return null;
     }
 
-    /*
-     * Baza przechowuje nazwę, kordy i wyświetlany nick
-     * razem — dzięki temu nie trzeba zmieniać SQL.
-     */
+    // ── Dane postaci przesyłane do bazy ──
+
     function encodePlayer(current) {
         const name = current.nick
             .trim()
@@ -550,14 +549,17 @@
         };
     }
 
-    // ── Pozycja dodatku ──
+    // ── Pozycja i zmiana postaci ──
 
     function constrain(left, top) {
         return {
             left: Math.max(
                 0,
                 Math.min(
-                    Math.max(0, innerWidth - panel.offsetWidth),
+                    Math.max(
+                        0,
+                        innerWidth - panel.offsetWidth
+                    ),
                     left
                 )
             ),
@@ -565,7 +567,10 @@
             top: Math.max(
                 0,
                 Math.min(
-                    Math.max(0, innerHeight - panel.offsetHeight),
+                    Math.max(
+                        0,
+                        innerHeight - panel.offsetHeight
+                    ),
                     top
                 )
             )
@@ -582,10 +587,28 @@
 
         currentCharacter = current.id;
 
-        displayNick = String(
-            readValue(nicknameKey(current.id), '') || ''
-        );
+        /*
+         * Jeśli wcześniej był nick zapisany dla aktualnej
+         * postaci, spróbuj go przenieść do wspólnego zapisu.
+         */
+        let savedNick = readValue(nicknameKey(), null);
 
+        if (savedNick === null) {
+            savedNick = readValue(
+                'obstawa-nick-' + world + '-' + current.id,
+                ''
+            );
+
+            if (savedNick) {
+                try {
+                    GM_setValue(nicknameKey(), savedNick);
+                } catch (_) {
+                    // Nick można wpisać ponownie w panelu.
+                }
+            }
+        }
+
+        displayNick = String(savedNick || '');
         nameInput.value = displayNick;
 
         const saved = readValue(
@@ -639,10 +662,8 @@
         try {
             GM_setValue(KEY_STORAGE, nextKey);
 
-            GM_setValue(
-                nicknameKey(current.id),
-                nextName
-            );
+            // Nick jest wspólny dla wszystkich postaci.
+            GM_setValue(nicknameKey(), nextName);
 
             clanKey = nextKey;
             displayNick = nextName;
@@ -797,7 +818,7 @@
     panel.addEventListener('pointerleave', hideTooltip);
     list.addEventListener('scroll', hideTooltip);
 
-    // ── Okienko z postaciami i kordami ──
+    // ── Okienko po najechaniu ──
 
     function hideTooltip() {
         hoveredMap = null;
@@ -819,7 +840,8 @@
         }
 
         const players = snapshot.players.filter(
-            player => norm(player.map) === norm(mapName)
+            player =>
+                norm(player.map) === norm(mapName)
         );
 
         tooltip.replaceChildren();
