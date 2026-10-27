@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Obstawa herosa eventowego SI + NI
 // @namespace    https://github.com/Maatras/HerosEve
-// @version      0.6.0
+// @version      0.8.0
 // @description  Wspólna lista obstawy map dla klanu.
 // @match        https://*.margonem.pl/*
 // @match        http://*.margonem.pl/*
@@ -27,7 +27,7 @@
     const API =
         'sb_publishable_DKLtQZ5c3RF6eU-kLGp52A_FfKKmSkD';
 
-    const STORAGE_KEY = 'obstawa-herosa-klucz-klanu';
+    const KEY_STORAGE = 'obstawa-herosa-klucz-klanu';
 
     const MAPS = [
         'Wyspa Magradit',
@@ -54,69 +54,34 @@
 
     if (document.getElementById('event-hunt-panel')) return;
 
-    function normalize(value) {
-        return String(value || '')
+    const norm = value =>
+        String(value || '')
             .normalize('NFC')
             .trim()
             .toLocaleLowerCase('pl-PL');
-    }
 
-    function isCoordinate(value) {
-        return value !== null &&
-            value !== undefined &&
-            value !== '' &&
-            Number.isInteger(Number(value)) &&
-            Number(value) >= 0;
-    }
+    const world = location.hostname.toLowerCase();
 
-    /*
-     * Kordy zapisujemy razem z informacją o postaci,
-     * żeby nie trzeba było zmieniać konfiguracji bazy.
-     */
-    function makePlayerInfo(nick, level, x, y) {
-        const name = String(nick || '').trim();
+    const positionKey = id =>
+        'obstawa-pozycja-' + world + '-' + id;
 
-        if (!name) return '';
+    const nicknameKey = id =>
+        'obstawa-nick-' + world + '-' + id;
 
-        const displayName =
-            name + (level ? ' ' + level : '');
-
-        if (isCoordinate(x) && isCoordinate(y)) {
-            return displayName +
-                ' ⟦' + Number(x) + ',' + Number(y) + '⟧';
+    function readValue(key, fallback) {
+        try {
+            return GM_getValue(key, fallback);
+        } catch (_) {
+            return fallback;
         }
-
-        return displayName;
     }
 
-    function readPlayerInfo(value) {
-        const raw = String(value || '');
-        const match = raw.match(/\s*⟦(\d+),(\d+)⟧$/);
+    let clanKey = String(
+        readValue(KEY_STORAGE, '') || ''
+    );
 
-        if (!match) {
-            return {
-                name: raw,
-                coordinates: null
-            };
-        }
-
-        return {
-            name: raw.slice(0, match.index).trim(),
-            coordinates: match[1] + ', ' + match[2]
-        };
-    }
-
-    let clanKey = '';
-
-    try {
-        clanKey = String(
-            GM_getValue(STORAGE_KEY, '') || ''
-        );
-    } catch (error) {
-        console.error(
-            '[Obstawa] Nie udało się odczytać klucza.'
-        );
-    }
+    let displayNick = '';
+    let currentCharacter = '';
 
     let snapshot = null;
     let lastSuccess = 0;
@@ -124,13 +89,17 @@
 
     let busy = false;
     let lastSent = 0;
-    let lastLocation = '';
+    let lastSignature = '';
     let lastError = '';
-    let keyRevision = 0;
+    let revision = 0;
 
     let hoveredMap = null;
     let pointerX = 0;
     let pointerY = 0;
+
+    let dragging = null;
+    let minimized = false;
+    let previousHeight = '';
 
     // ── Panel ──
 
@@ -200,9 +169,9 @@
         user-select: none;
     `;
 
-    const headerTitle = document.createElement('span');
+    const title = document.createElement('span');
 
-    headerTitle.textContent = 'OBSTAWA HEROSA';
+    title.textContent = 'OBSTAWA HEROSA';
 
     const minimizeButton = document.createElement('button');
 
@@ -229,8 +198,7 @@
         cursor: pointer;
     `;
 
-    header.appendChild(headerTitle);
-    header.appendChild(minimizeButton);
+    header.append(title, minimizeButton);
     panel.appendChild(header);
 
     // ── Status ──
@@ -239,7 +207,6 @@
 
     status.style.cssText = `
         flex: none;
-
         padding: 2px 5px;
 
         background: #171a1c;
@@ -250,13 +217,14 @@
 
     panel.appendChild(status);
 
-    // ── Klucz klanu ──
+    // ── Klucz i wyświetlany nick ──
 
     const settings = document.createElement('div');
 
     settings.style.cssText = `
         flex: none;
         display: flex;
+        flex-direction: column;
         gap: 3px;
 
         padding: 3px 4px;
@@ -265,28 +233,61 @@
         border-bottom: 1px solid #444;
     `;
 
-    const keyInput = document.createElement('input');
+    function makeInput(placeholder, type) {
+        const input = document.createElement('input');
 
-    keyInput.type = 'password';
-    keyInput.placeholder = 'Klucz klanu';
-    keyInput.autocomplete = 'off';
-    keyInput.spellcheck = false;
+        input.type = type;
+        input.placeholder = placeholder;
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+
+        input.style.cssText = `
+            flex: 1;
+            min-width: 0;
+
+            box-sizing: border-box;
+            padding: 2px 5px;
+
+            background: #080a0c;
+            color: #fff;
+
+            border: 1px solid #666;
+            border-radius: 4px;
+
+            font: 10px Arial, sans-serif;
+        `;
+
+        input.addEventListener('keydown', event => {
+            event.stopPropagation();
+
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                saveButton.click();
+            }
+        });
+
+        return input;
+    }
+
+    const keyInput = makeInput(
+        'Klucz klanu',
+        'password'
+    );
+
     keyInput.value = clanKey;
 
-    keyInput.style.cssText = `
-        flex: 1;
-        min-width: 0;
+    const nameInput = makeInput(
+        'Wyświetlany nick (opcjonalnie)',
+        'text'
+    );
 
-        box-sizing: border-box;
-        padding: 2px 5px;
+    nameInput.maxLength = 20;
 
-        background: #080a0c;
-        color: #fff;
+    const firstLine = document.createElement('div');
 
-        border: 1px solid #666;
-        border-radius: 4px;
-
-        font: 10px Arial, sans-serif;
+    firstLine.style.cssText = `
+        display: flex;
+        gap: 3px;
     `;
 
     const saveButton = document.createElement('button');
@@ -296,7 +297,6 @@
 
     saveButton.style.cssText = `
         flex: none;
-
         padding: 2px 6px;
 
         background: #383838;
@@ -309,8 +309,8 @@
         cursor: pointer;
     `;
 
-    settings.appendChild(keyInput);
-    settings.appendChild(saveButton);
+    firstLine.append(keyInput, saveButton);
+    settings.append(firstLine, nameInput);
     panel.appendChild(settings);
 
     // ── Lista map ──
@@ -345,7 +345,7 @@
         max-height: 70vh;
 
         box-sizing: border-box;
-        overflow: auto;
+        overflow: hidden;
 
         padding: 8px 10px;
 
@@ -366,167 +366,310 @@
 
     document.body.appendChild(tooltip);
 
-    function hideTooltip() {
-        hoveredMap = null;
-        tooltip.style.display = 'none';
+    // ── Odczyt danych gry ──
+
+    function isCoordinate(value) {
+        return (
+            value !== null &&
+            value !== undefined &&
+            value !== '' &&
+            Number.isInteger(Number(value)) &&
+            Number(value) >= 0
+        );
     }
 
-    function positionTooltip() {
-        const margin = 8;
+    function getContext() {
+        // Nowy interfejs
 
-        const left = Math.min(
-            pointerX + 14,
-            innerWidth - tooltip.offsetWidth - margin
-        );
+        const ni = W.Engine?.hero?.d;
+        const mapNI = W.Engine?.map?.d;
 
-        const top = Math.min(
-            pointerY + 14,
-            innerHeight - tooltip.offsetHeight - margin
-        );
+        if (ni?.id && mapNI?.name) {
+            let observed = null;
 
-        tooltip.style.left =
-            Math.max(margin, left) + 'px';
+            try {
+                const players =
+                    W.Engine.others.getDrawableList();
 
-        tooltip.style.top =
-            Math.max(margin, top) + 'px';
+                if (Array.isArray(players)) {
+                    observed = [
+                        ...new Set(
+                            players
+                                .filter(player =>
+                                    player?.isPlayer === true &&
+                                    player.d?.id != null
+                                )
+                                .map(player =>
+                                    String(player.d.id)
+                                )
+                        )
+                    ];
+                }
+            } catch (_) {
+                // Brak aktualnej listy graczy.
+            }
+
+            return {
+                id: String(ni.id),
+                nick: String(ni.nick || ni.n || ''),
+                level: ni.lvl,
+                x: ni.x,
+                y: ni.y,
+                map: String(mapNI.name),
+                observed
+            };
+        }
+
+        // Stary interfejs
+
+        const si = W.hero;
+        const mapSI = W.map;
+
+        if (si?.id && mapSI?.name) {
+            let observed = null;
+
+            if (
+                W.g?.other &&
+                typeof W.g.other === 'object'
+            ) {
+                observed = [
+                    ...new Set(
+                        Object.entries(W.g.other)
+                            .filter(([, player]) =>
+                                player &&
+                                typeof player === 'object'
+                            )
+                            .map(([key, player]) =>
+                                String(player.id ?? key)
+                            )
+                            .filter(id =>
+                                /^\d+$/.test(id)
+                            )
+                    )
+                ];
+            }
+
+            return {
+                id: String(si.id),
+                nick: String(si.nick || si.n || ''),
+                level: si.lvl,
+                x: si.x,
+                y: si.y,
+                map: String(mapSI.name),
+                observed
+            };
+        }
+
+        return null;
     }
 
-    function updateTooltip() {
-        if (!hoveredMap) {
-            tooltip.style.display = 'none';
+    /*
+     * Baza przechowuje nazwę, kordy i wyświetlany nick
+     * razem — dzięki temu nie trzeba zmieniać SQL.
+     */
+    function encodePlayer(current) {
+        const name = current.nick
+            .trim()
+            .replace(/[⟦⟧⟪⟫]/g, '');
+
+        if (!name) return '';
+
+        const level = current.level
+            ? ' ' + String(current.level)
+            : '';
+
+        const coordinates =
+            isCoordinate(current.x) &&
+            isCoordinate(current.y)
+                ? ' ⟦' +
+                  Number(current.x) +
+                  ',' +
+                  Number(current.y) +
+                  '⟧'
+                : '';
+
+        const alias = displayNick
+            .replace(/[⟦⟧⟪⟫]/g, '')
+            .trim()
+            .slice(0, 20);
+
+        const aliasPart = alias
+            ? ' ⟪' + alias + '⟫'
+            : '';
+
+        const suffix =
+            level + coordinates + aliasPart;
+
+        return (
+            name.slice(
+                0,
+                Math.max(
+                    0,
+                    80 - Array.from(suffix).length
+                )
+            ) + suffix
+        );
+    }
+
+    function decodePlayer(raw) {
+        let text = String(raw || '');
+        let alias = '';
+
+        const aliasMatch = text.match(
+            /\s*⟪([^⟪⟫]*)⟫$/
+        );
+
+        if (aliasMatch) {
+            alias = aliasMatch[1];
+            text = text.slice(0, aliasMatch.index);
+        }
+
+        let coords = null;
+
+        const coordsMatch = text.match(
+            /\s*⟦(\d+),(\d+)⟧$/
+        );
+
+        if (coordsMatch) {
+            coords =
+                coordsMatch[1] + ', ' + coordsMatch[2];
+
+            text = text.slice(0, coordsMatch.index);
+        }
+
+        const fullName =
+            text.trim() || 'Nieznana postać';
+
+        const label =
+            alias || fullName.replace(/\s+\d+$/, '');
+
+        return {
+            fullName,
+            label,
+            coords
+        };
+    }
+
+    // ── Pozycja dodatku ──
+
+    function constrain(left, top) {
+        return {
+            left: Math.max(
+                0,
+                Math.min(
+                    Math.max(0, innerWidth - panel.offsetWidth),
+                    left
+                )
+            ),
+
+            top: Math.max(
+                0,
+                Math.min(
+                    Math.max(0, innerHeight - panel.offsetHeight),
+                    top
+                )
+            )
+        };
+    }
+
+    function switchCharacter(current) {
+        if (
+            !current?.id ||
+            currentCharacter === current.id
+        ) {
             return;
         }
 
-        const connected =
-            snapshot &&
-            Date.now() - lastSuccess < 15000;
+        currentCharacter = current.id;
 
-        if (!connected) {
-            tooltip.style.display = 'none';
-            return;
-        }
-
-        const players = snapshot.players.filter(
-            player =>
-                normalize(player.map) ===
-                normalize(hoveredMap)
+        displayNick = String(
+            readValue(nicknameKey(current.id), '') || ''
         );
 
-        tooltip.replaceChildren();
+        nameInput.value = displayNick;
 
-        const title = document.createElement('div');
+        const saved = readValue(
+            positionKey(current.id),
+            null
+        );
 
-        title.textContent = hoveredMap;
+        const position = constrain(
+            Number.isFinite(saved?.left)
+                ? saved.left
+                : 12,
 
-        title.style.cssText = `
-            padding-bottom: 5px;
-            margin-bottom: 5px;
+            Number.isFinite(saved?.top)
+                ? saved.top
+                : 120
+        );
 
-            border-bottom: 1px solid #555;
+        panel.style.left = position.left + 'px';
+        panel.style.top = position.top + 'px';
 
-            color: #fff;
-            font-weight: bold;
+        snapshot = null;
+        lastSuccess = 0;
+        lastError = '';
+        lastSent = 0;
+        lastSignature = '';
 
-            overflow-wrap: anywhere;
-        `;
-
-        tooltip.appendChild(title);
-
-        if (!players.length) {
-            const empty = document.createElement('div');
-
-            empty.textContent =
-                'Nikt z dodatkiem tu nie stoi.';
-
-            empty.style.color = '#aaa';
-
-            tooltip.appendChild(empty);
-        } else {
-            players.forEach((player, index) => {
-                const info = readPlayerInfo(player.nick);
-
-                const entry = document.createElement('div');
-
-                entry.style.cssText = `
-                    padding: 3px 0;
-                    ${
-                        index > 0
-                            ? 'border-top: 1px solid #333;'
-                            : ''
-                    }
-                `;
-
-                const name = document.createElement('div');
-
-                name.textContent = info.name || 'Nieznana postać';
-
-                name.style.cssText = `
-                    color: #fff;
-                    font-weight: bold;
-                    overflow-wrap: anywhere;
-                `;
-
-                const coordinates = document.createElement('div');
-
-                coordinates.textContent =
-                    'Kordy: ' +
-                    (info.coordinates || 'brak danych');
-
-                coordinates.style.color = '#bbb';
-
-                entry.appendChild(name);
-                entry.appendChild(coordinates);
-                tooltip.appendChild(entry);
-            });
-        }
-
-        tooltip.style.display = 'block';
-        positionTooltip();
+        revision++;
+        hideTooltip();
     }
 
-    // ── Zapisywanie klucza ──
+    // ── Zapisywanie ustawień ──
 
     saveButton.addEventListener('click', () => {
-        const newKey = keyInput.value.trim();
+        const current = getContext();
+
+        if (!current?.id) {
+            lastError = 'Poczekaj na dane postaci';
+            paint();
+            return;
+        }
+
+        switchCharacter(current);
+
+        const nextKey = keyInput.value.trim();
+
+        const nextName = nameInput.value
+            .replace(/[⟦⟧⟪⟫]/g, '')
+            .trim()
+            .slice(0, 20);
 
         try {
-            GM_setValue(STORAGE_KEY, newKey);
+            GM_setValue(KEY_STORAGE, nextKey);
 
-            clanKey = newKey;
-            keyRevision++;
+            GM_setValue(
+                nicknameKey(current.id),
+                nextName
+            );
 
+            clanKey = nextKey;
+            displayNick = nextName;
+            nameInput.value = nextName;
+
+            revision++;
             snapshot = null;
             lastSuccess = 0;
-            lastSent = 0;
-            lastLocation = '';
             lastError = '';
+            lastSent = 0;
+            lastSignature = '';
 
             hideTooltip();
             paint();
             sync();
-        } catch (error) {
-            lastError = 'Nie udało się zapisać klucza.';
+        } catch (_) {
+            lastError = 'Nie udało się zapisać ustawień';
             paint();
-        }
-    });
-
-    keyInput.addEventListener('keydown', event => {
-        event.stopPropagation();
-
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            saveButton.click();
         }
     });
 
     // ── Minimalizowanie ──
 
-    let minimized = false;
-    let previousHeight = '';
-
-    minimizeButton.addEventListener('pointerdown', event => {
-        event.stopPropagation();
-    });
+    minimizeButton.addEventListener(
+        'pointerdown',
+        event => event.stopPropagation()
+    );
 
     minimizeButton.addEventListener('click', event => {
         event.stopPropagation();
@@ -578,7 +721,6 @@
         list.scrollTop += amount;
 
         hideTooltip();
-
         event.preventDefault();
         event.stopPropagation();
     }, {
@@ -586,8 +728,6 @@
     });
 
     // ── Przesuwanie panelu ──
-
-    let dragging = null;
 
     header.addEventListener('pointerdown', event => {
         if (event.button !== 0) return;
@@ -608,143 +748,189 @@
     header.addEventListener('pointermove', event => {
         if (!dragging) return;
 
-        panel.style.left = Math.max(
-            0,
-            Math.min(
-                innerWidth - panel.offsetWidth,
-                event.clientX - dragging.x
-            )
-        ) + 'px';
+        const position = constrain(
+            event.clientX - dragging.x,
+            event.clientY - dragging.y
+        );
 
-        panel.style.top = Math.max(
-            0,
-            Math.min(
-                innerHeight - panel.offsetHeight,
-                event.clientY - dragging.y
-            )
-        ) + 'px';
+        panel.style.left = position.left + 'px';
+        panel.style.top = position.top + 'px';
     });
 
     header.addEventListener('pointerup', () => {
+        if (!dragging) return;
+
         dragging = null;
+
+        const current = getContext();
+
+        if (!current?.id) return;
+
+        const rect = panel.getBoundingClientRect();
+
+        try {
+            GM_setValue(
+                positionKey(current.id),
+                constrain(rect.left, rect.top)
+            );
+        } catch (_) {
+            lastError = 'Nie udało się zapisać pozycji';
+        }
     });
 
     header.addEventListener('pointercancel', () => {
         dragging = null;
     });
 
-    panel.addEventListener('pointerleave', () => {
-        hideTooltip();
+    window.addEventListener('resize', () => {
+        const rect = panel.getBoundingClientRect();
+
+        const position = constrain(
+            rect.left,
+            rect.top
+        );
+
+        panel.style.left = position.left + 'px';
+        panel.style.top = position.top + 'px';
     });
 
-    // ── Odczyt danych gry ──
+    panel.addEventListener('pointerleave', hideTooltip);
+    list.addEventListener('scroll', hideTooltip);
 
-    function getContext() {
-        // Nowy interfejs
+    // ── Okienko z postaciami i kordami ──
 
-        const niHero = W.Engine?.hero?.d;
-        const niMap = W.Engine?.map?.d;
-
-        if (niHero?.id && niMap?.name) {
-            let observed = null;
-
-            try {
-                const players =
-                    W.Engine.others.getDrawableList();
-
-                if (Array.isArray(players)) {
-                    observed = [
-                        ...new Set(
-                            players
-                                .filter(player =>
-                                    player?.isPlayer === true &&
-                                    player.d?.id != null
-                                )
-                                .map(player =>
-                                    String(player.d.id)
-                                )
-                        )
-                    ];
-                }
-            } catch (error) {
-                // Gra nie udostępniła listy graczy.
-            }
-
-            return {
-                id: String(niHero.id),
-
-                nick: makePlayerInfo(
-                    niHero.nick || niHero.n,
-                    niHero.lvl,
-                    niHero.x,
-                    niHero.y
-                ),
-
-                map: String(niMap.name),
-
-                observed
-            };
-        }
-
-        // Stary interfejs
-
-        const siHero = W.hero;
-        const siMap = W.map;
-
-        if (siHero?.id && siMap?.name) {
-            let observed = null;
-
-            if (
-                W.g?.other &&
-                typeof W.g.other === 'object'
-            ) {
-                observed = [
-                    ...new Set(
-                        Object.entries(W.g.other)
-                            .filter(([key, player]) =>
-                                player &&
-                                typeof player === 'object'
-                            )
-                            .map(([key, player]) =>
-                                String(player.id ?? key)
-                            )
-                            .filter(id =>
-                                /^\d+$/.test(id)
-                            )
-                    )
-                ];
-            }
-
-            return {
-                id: String(siHero.id),
-
-                nick: makePlayerInfo(
-                    siHero.nick || siHero.n,
-                    siHero.lvl,
-                    siHero.x,
-                    siHero.y
-                ),
-
-                map: String(siMap.name),
-
-                observed
-            };
-        }
-
-        return null;
+    function hideTooltip() {
+        hoveredMap = null;
+        tooltip.style.display = 'none';
     }
 
+    function showTooltip(mapName, x, y) {
+        hoveredMap = mapName;
+        pointerX = x;
+        pointerY = y;
+
+        const connected =
+            snapshot &&
+            Date.now() - lastSuccess < 15000;
+
+        if (!connected) {
+            tooltip.style.display = 'none';
+            return;
+        }
+
+        const players = snapshot.players.filter(
+            player => norm(player.map) === norm(mapName)
+        );
+
+        tooltip.replaceChildren();
+
+        const heading = document.createElement('div');
+
+        heading.textContent = mapName;
+
+        heading.style.cssText = `
+            padding-bottom: 5px;
+            margin-bottom: 5px;
+
+            border-bottom: 1px solid #555;
+
+            color: #fff;
+            font-weight: bold;
+
+            overflow-wrap: anywhere;
+        `;
+
+        tooltip.appendChild(heading);
+
+        if (!players.length) {
+            const empty = document.createElement('div');
+
+            empty.textContent =
+                'Nikt z dodatkiem tu nie stoi.';
+
+            empty.style.color = '#aaa';
+
+            tooltip.appendChild(empty);
+        } else {
+            players.forEach((player, index) => {
+                const info = decodePlayer(player.nick);
+
+                const entry = document.createElement('div');
+
+                entry.style.cssText = `
+                    padding: 3px 0;
+                    ${
+                        index
+                            ? 'border-top: 1px solid #333;'
+                            : ''
+                    }
+                `;
+
+                const name = document.createElement('div');
+
+                name.textContent = info.fullName;
+
+                name.style.cssText = `
+                    color: #fff;
+                    font-weight: bold;
+                    overflow-wrap: anywhere;
+                `;
+
+                const coords = document.createElement('div');
+
+                coords.textContent =
+                    'Kordy: ' +
+                    (info.coords || 'brak danych');
+
+                coords.style.color = '#bbb';
+
+                entry.append(name, coords);
+                tooltip.appendChild(entry);
+            });
+        }
+
+        tooltip.style.display = 'block';
+
+        tooltip.style.left = Math.max(
+            8,
+            Math.min(
+                x + 14,
+                innerWidth - tooltip.offsetWidth - 8
+            )
+        ) + 'px';
+
+        tooltip.style.top = Math.max(
+            8,
+            Math.min(
+                y + 14,
+                innerHeight - tooltip.offsetHeight - 8
+            )
+        ) + 'px';
+    }
+
+    list.addEventListener('pointermove', event => {
+        const row = event.target.closest('[data-event-map]');
+
+        if (row && list.contains(row)) {
+            showTooltip(
+                row.dataset.eventMap,
+                event.clientX,
+                event.clientY
+            );
+        }
+    });
+
     function formatTime(milliseconds) {
-        const totalSeconds = Math.max(
+        const seconds = Math.max(
             0,
             Math.floor(milliseconds / 1000)
         );
 
-        const hours = Math.floor(totalSeconds / 3600);
-        const minutes = Math.floor(totalSeconds % 3600 / 60);
-        const seconds = totalSeconds % 60;
-
-        return [hours, minutes, seconds]
+        return [
+            Math.floor(seconds / 3600),
+            Math.floor(seconds % 3600 / 60),
+            seconds % 60
+        ]
             .map(value =>
                 String(value).padStart(2, '0')
             )
@@ -754,14 +940,13 @@
     // ── Wyświetlanie listy ──
 
     function paint() {
-        const oldScrollTop = list.scrollTop;
+        const scroll = list.scrollTop;
 
         list.replaceChildren();
 
-        const age = Date.now() - lastSuccess;
-
         const connected = Boolean(
-            snapshot && age < 15000
+            snapshot &&
+            Date.now() - lastSuccess < 15000
         );
 
         if (!clanKey) {
@@ -790,7 +975,15 @@
         }
 
         for (const mapName of MAPS) {
+            const own =
+                snapshot?.players?.filter(
+                    player =>
+                        norm(player.map) === norm(mapName)
+                ) || [];
+
             const row = document.createElement('div');
+
+            row.dataset.eventMap = mapName;
 
             row.style.cssText = `
                 display: flex;
@@ -812,18 +1005,11 @@
                 border-radius: 6px;
             `;
 
-            const ownPlayers =
-                snapshot?.players?.filter(
-                    player =>
-                        normalize(player.map) ===
-                        normalize(mapName)
-                ) || [];
+            const label = document.createElement('span');
 
-            const mapLabel = document.createElement('span');
+            label.textContent = mapName;
 
-            mapLabel.textContent = mapName;
-
-            mapLabel.style.cssText = `
+            label.style.cssText = `
                 flex: 1;
                 min-width: 0;
 
@@ -832,19 +1018,19 @@
 
                 color: ${
                     connected
-                        ? ownPlayers.length
+                        ? own.length
                             ? '#83ee92'
                             : '#ff8980'
                         : '#aaa'
                 };
             `;
 
-            row.appendChild(mapLabel);
+            row.appendChild(label);
 
-            let otherCount = '—';
+            let others = '—';
 
-            if (connected && ownPlayers.length) {
-                const observer = [...ownPlayers]
+            if (connected && own.length) {
+                const observer = [...own]
                     .filter(player =>
                         Array.isArray(player.observed)
                     )
@@ -854,18 +1040,14 @@
                     )[0];
 
                 if (observer) {
-                    const ownIds = new Set(
-                        ownPlayers.map(player =>
-                            String(player.id)
-                        )
+                    const ids = new Set(
+                        own.map(player => String(player.id))
                     );
 
-                    otherCount = new Set(
+                    others = new Set(
                         observer.observed
                             .map(String)
-                            .filter(id =>
-                                !ownIds.has(id)
-                            )
+                            .filter(id => !ids.has(id))
                     ).size;
                 }
             }
@@ -873,7 +1055,7 @@
             const counts = document.createElement('span');
 
             counts.textContent = connected
-                ? ownPlayers.length + ', ' + otherCount
+                ? own.length + ', ' + others
                 : '—, —';
 
             counts.title =
@@ -883,100 +1065,102 @@
                 flex: none;
                 min-width: 32px;
 
-                color: ${connected ? '#00ef90' : '#aaa'};
-
-                font-weight: bold;
                 text-align: right;
+                font-weight: bold;
+
+                color: ${connected ? '#00ef90' : '#aaa'};
             `;
 
             row.appendChild(counts);
 
-            const lastSeen =
+            const last =
                 snapshot?.visits?.[mapName] ||
                 Object.entries(snapshot?.visits || {})
                     .find(([name]) =>
-                        normalize(name) === normalize(mapName)
+                        norm(name) === norm(mapName)
                     )?.[1];
 
-            const time = document.createElement('span');
+            const state = document.createElement('span');
 
-            time.style.cssText = `
+            state.style.cssText = `
                 flex: none;
+
+                max-width: 110px;
                 min-width: 66px;
 
-                color: ${connected ? '#eee' : '#aaa'};
+                overflow: hidden;
+                text-overflow: ellipsis;
 
                 text-align: right;
-                font-variant-numeric: tabular-nums;
+
+                color: ${connected ? '#eee' : '#aaa'};
             `;
 
-            if (!connected) {
-                time.textContent = '—';
-            } else if (ownPlayers.length) {
-                time.textContent = 'OBSTAWIONA';
-            } else if (lastSeen) {
-                time.textContent = formatTime(
-                    Date.now() +
-                    serverOffset -
-                    Date.parse(lastSeen)
-                );
-            } else {
-                time.textContent = 'brak danych';
-            }
+            state.textContent = !connected
+                ? '—'
+                : own.length
+                    ? own
+                        .map(player =>
+                            decodePlayer(player.nick).label
+                        )
+                        .join(', ')
+                    : last
+                        ? formatTime(
+                            Date.now() +
+                            serverOffset -
+                            Date.parse(last)
+                        )
+                        : 'brak danych';
 
-            row.appendChild(time);
-
-            row.addEventListener('pointerenter', event => {
-                hoveredMap = mapName;
-                pointerX = event.clientX;
-                pointerY = event.clientY;
-
-                updateTooltip();
-            });
-
-            row.addEventListener('pointermove', event => {
-                hoveredMap = mapName;
-                pointerX = event.clientX;
-                pointerY = event.clientY;
-
-                updateTooltip();
-            });
-
-            row.addEventListener('pointerleave', event => {
-                const next = event.relatedTarget;
-
-                if (!next || !list.contains(next)) {
-                    hideTooltip();
-                }
-            });
-
+            row.appendChild(state);
             list.appendChild(row);
         }
 
-        list.scrollTop = oldScrollTop;
+        list.scrollTop = scroll;
 
         if (hoveredMap) {
-            updateTooltip();
+            const under = document.elementFromPoint(
+                pointerX,
+                pointerY
+            );
+
+            const row = under?.closest('[data-event-map]');
+
+            if (row && list.contains(row)) {
+                showTooltip(
+                    row.dataset.eventMap,
+                    pointerX,
+                    pointerY
+                );
+            } else {
+                hideTooltip();
+            }
         }
     }
 
     // ── Synchronizacja z bazą ──
 
     function sync() {
-        if (!clanKey) return;
-
         const current = getContext();
 
-        if (!current || !current.nick) return;
+        if (!current?.id) return;
 
-        const locationSignature =
+        switchCharacter(current);
+
+        if (!clanKey) return;
+
+        const info = encodePlayer(current);
+
+        if (!info) return;
+
+        const signature =
             current.id + '|' + current.map;
 
         if (
             busy ||
             (
                 Date.now() - lastSent < 5000 &&
-                locationSignature === lastLocation
+                signature === lastSignature
             )
         ) {
             return;
@@ -984,10 +1168,10 @@
 
         busy = true;
         lastSent = Date.now();
-        lastLocation = locationSignature;
+        lastSignature = signature;
 
         const started = Date.now();
-        const requestRevision = keyRevision;
+        const requestRevision = revision;
 
         GM_xmlhttpRequest({
             method: 'POST',
@@ -1002,7 +1186,7 @@
                 p_key: clanKey,
                 p_world: location.hostname.split('.')[0],
                 p_id: current.id,
-                p_nick: current.nick,
+                p_nick: info,
                 p_map: current.map,
                 p_observed: current.observed
             }),
@@ -1012,7 +1196,7 @@
             onload(response) {
                 busy = false;
 
-                if (requestRevision !== keyRevision) return;
+                if (requestRevision !== revision) return;
 
                 if (
                     response.status < 200 ||
@@ -1031,7 +1215,7 @@
                     );
 
                     if (!Array.isArray(data.players)) {
-                        throw new Error('Nieprawidłowy format');
+                        throw new Error('format');
                     }
 
                     snapshot = data;
@@ -1043,7 +1227,7 @@
                         (started + Date.now()) / 2;
 
                     paint();
-                } catch (error) {
+                } catch (_) {
                     lastError = 'Błąd odpowiedzi bazy';
                     paint();
                 }
@@ -1052,19 +1236,21 @@
             onerror() {
                 busy = false;
 
-                if (requestRevision !== keyRevision) return;
-
-                lastError = 'Błąd połączenia';
-                paint();
+                if (requestRevision === revision) {
+                    lastError = 'Błąd połączenia';
+                    paint();
+                }
             },
 
             ontimeout() {
                 busy = false;
 
-                if (requestRevision !== keyRevision) return;
+                if (requestRevision === revision) {
+                    lastError =
+                        'Przekroczono czas połączenia';
 
-                lastError = 'Przekroczono czas połączenia';
-                paint();
+                    paint();
+                }
             },
 
             onabort() {
